@@ -1,31 +1,22 @@
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
-
-mod operate;
-
-#[derive(Parser)]
-#[command(name = "crab-stow")]
-#[command(about = "Stow CLI reimagined in Rust", version = "0.0.1", author = "Nicolas Moon")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
+mod cli;
+mod stow;
+mod config {
+    pub use crate::cli::StowConfig;
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    Stow {
-        #[arg(help = "The package directory to stow")]
-        package: PathBuf,
-        #[arg(help = "The Target directory")]
-        target: PathBuf
-    }
-}
+use anyhow::Result;
+use env_logger;
 
+fn main() -> Result<()> {
+    //init the logger
+    env_logger::init();
 
-fn main() {
-    let cli = Cli::parse()
+    // init config
+    let config = cli::parse_args();
 
-    match &cli.command {
-        Commands::Stow { package, target }.expect("Failed to stow");
-    }
+    // create crabStow instance and execute
+    let crab_stow = stow::CrabStow::new(config);
+    crab_stow.execute()?;
+
+    Ok(())
 }

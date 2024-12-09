@@ -1,7 +1,40 @@
 # Crab-Stow (WIP)
-Crab-Stow is a command line utility written in Rust that mirros the functionality of GNU stow.
-It helps in managing the installation of sofware packages by creating and remvoving symbolic links to the 
-target direcotries, allowing for a clean and maintainable structure.
+A Rust reimplementation of GNU stow for managing symlink farms.
+
+## Features
+- Stow and unstow packages
+- simulate mode
+- verbose logging
+- Cross-platform support
+
+
+## Installation
+```bash
+git clone https://github.com/nicolas-moon/crab_stow.git
+cd crab_stow
+cargo build --release
+```
+
+## Usage
+```bash
+# Stow a package
+./crab_stow dotfiles
+
+# Unstow a package
+./crab_stow -D dotfiles
+
+# Simulate a stow
+./crab_stow -n dotfiles
+```
+
+## Configuration
+- `-t, --target`: Set target directory (default: current directory)
+- `-d, --dir`: Set stow directory (default: current directory)
+- `-n, --no-act`: Simulate changes without making them
+- `v, --verbose`: Increase verbosity
+- `-R , --restow`: Unstow and then stow package
+- `--adopt`: adopt existing files into stow
+- `--no-folding`: Disable directory folding
 
 ## Goals
 
@@ -12,9 +45,6 @@ symbolic links and manage the multiple package direcoties.
 - Ease of Use: Provide a user-friendly command line interface with clear commands and arguments.
 - Cross-Platform Compatibility: Ensure the tools works seamlessly on various operating systems, include Windows, macOS and Linux.
 
-## Features
-- Stow: Create symbolic links from the package directory to the target directory
-- Unstow: Remove symbolic links from the target directory.
-- recurisive Operations: Handle directories recurisvely to ensure all files and subdirectories are correctly linked or unlicked.
+### License
 
-
+MIT License

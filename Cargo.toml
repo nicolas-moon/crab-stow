@@ -2,6 +2,12 @@
 name = "crab-stow"
 version = "0.1.0"
 edition = "2021"
+authors = ["Nicolas Moon <nmoon@nickmoon.rocks"]
+description = "A Rust implimentation of GNU stow"
 
 [dependencies]
 clap = { version = "4.5.8", features = ["derive"] }
+anyhow = "1.0.75"
+env_logger = "0.11.5"
+log = "0.4.22"
+
