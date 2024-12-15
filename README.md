@@ -3,28 +3,35 @@ A Rust reimplementation of GNU stow for managing symlink farms.
 
 ## Features
 - Stow and unstow packages
-- simulate mode
-- verbose logging
+- Simulate mode
+- Verbose logging
 - Cross-platform support
 
 
 ## Installation
+
+### Bash
+
 ```bash
 git clone https://github.com/nicolas-moon/crab_stow.git
 cd crab_stow
 cargo build --release
 ```
+### Justfile
+```bash
+just install
+```
 
 ## Usage
 ```bash
 # Stow a package
-./crab_stow dotfiles
+./crab-stow dotfiles
 
 # Unstow a package
-./crab_stow -D dotfiles
+./crab-stow -D dotfiles
 
 # Simulate a stow
-./crab_stow -n dotfiles
+./crab-stow -n dotfiles
 ```
 
 ## Configuration
@@ -33,8 +40,8 @@ cargo build --release
 - `-n, --no-act`: Simulate changes without making them
 - `v, --verbose`: Increase verbosity
 - `-R , --restow`: Unstow and then stow package
-- `--adopt`: adopt existing files into stow
-- `--no-folding`: Disable directory folding
+- `--adopt`: adopt existing files into stow (WIP)
+- `--no-folding`: Disable directory folding (WIP)
 
 ## Goals
 
