@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::path::Path;
 
-use crate::config::StowConfig;
+use crate::cli::StowConfig;
 
 /// Main stow struct to manage symlink operations
 pub struct CrabStow {
@@ -39,13 +39,13 @@ impl CrabStow {
                 println!("Would create package directory: {:?}", destination_path);
             } else {
                 fs::create_dir_all(&destination_path)?;
-                if self.config.verbose {
+                if self.config.verbose > 0 {
                     info!("Created package directory: {:?}", destination_path);
                 }
             }
         }
 
-        if self.config.verbose {
+        if self.config.verbose > 0 {
             info!("Stowing package: {}", self.config.package_name);
         }
 
@@ -60,24 +60,33 @@ impl CrabStow {
         if !package_path.exists() {
             return Err(Error::new(
                 ErrorKind::NotFound,
-                format!("Pakcage {} not found", self.config.package_name),
+                format!("Package {} not found", self.config.package_name),
             ));
         }
 
-        if self.config.verbose {
+        if self.config.verbose > 0 {
             info!("Unstowing package: {}", self.config.package_name);
         }
 
-        self.traverse_and_unlink(&package_path, &destination_path)
+        let result = self.traverse_and_unlink(&package_path, &destination_path);
+
+        // Clean up the package directory itself if unstowing left it empty.
+        if result.is_ok() && self.is_dir_empty(&destination_path) {
+            self.remove_path(&destination_path, "directory")?;
+        }
+
+        result
     }
 
-    ///Recursively traverse directories and create symlinks
+    /// Recursively traverse directories and create symlinks
     fn traverse_and_link(&self, source: &Path, target: &Path) -> Result<()> {
         for entry in fs::read_dir(source)? {
             let entry = entry?;
             let file_type = entry.file_type()?;
             let source_path = entry.path();
-            let relative_path = source_path.strip_prefix(source).unwrap();
+            let relative_path = source_path
+                .strip_prefix(source)
+                .expect("paths returned by read_dir are always under the source directory");
             let target_path = target.join(relative_path);
 
             if file_type.is_dir() {
@@ -86,7 +95,7 @@ impl CrabStow {
                     if self.config.simulate {
                         println!("Would create directory: {:?}", target_path);
                     } else {
-                        let _ = fs::create_dir_all(&target_path);
+                        fs::create_dir_all(&target_path)?;
                     }
                 }
 
@@ -98,8 +107,8 @@ impl CrabStow {
                     println!("Would symlink: {:?} -> {:?}", source_path, target_path);
                 } else {
                     if target_path.exists() {
-                        if self.config.verbose {
-                            warn!("Skipping existing path: {:?}", target_path)
+                        if self.config.verbose > 0 {
+                            warn!("Skipping existing path: {:?}", target_path);
                         }
                         continue;
                     }
@@ -107,7 +116,7 @@ impl CrabStow {
                     #[cfg(unix)]
                     {
                         std::os::unix::fs::symlink(&source_path, &target_path)?;
-                        if self.config.verbose {
+                        if self.config.verbose > 0 {
                             info!("Created symlink: {:?} -> {:?}", source_path, target_path);
                         }
                     }
@@ -116,7 +125,7 @@ impl CrabStow {
                     {
                         // windows symlink creation (might require admin privs)
                         std::os::windows::fs::symlink_file(&source_path, &target_path)?;
-                        if self.config.verbose {
+                        if self.config.verbose > 0 {
                             info!("Created symlink: {:?} -> {:?}", source_path, target_path);
                         }
                     }
@@ -132,35 +141,46 @@ impl CrabStow {
             let entry = entry?;
             let file_type = entry.file_type()?;
             let source_path = entry.path();
-            let relative_path = source_path.strip_prefix(source).unwrap();
+            let relative_path = source_path
+                .strip_prefix(source)
+                .expect("paths returned by read_dir are always under the source directory");
             let target_path = target.join(relative_path);
 
             if file_type.is_dir() {
-                if target_path.is_symlink() || self.is_dir_empty(&target_path) {
-                    if self.config.simulate {
-                        println!("Would remove directory: {:?}", target_path);
-                    } else {
-                        fs::remove_dir(&target_path)?;
-                        if self.config.verbose {
-                            info!("removed directory: {:?}", target_path);
-                        }
-                    }
-                } else {
+                if target_path.is_symlink() {
+                    self.remove_path(&target_path, "directory")?;
+                } else if target_path.exists() {
+                    // recurse into the directory, then remove it if unstowing
+                    // left it empty
                     self.traverse_and_unlink(&source_path, &target_path)?;
+                    if self.is_dir_empty(&target_path) {
+                        self.remove_path(&target_path, "directory")?;
+                    }
                 }
             } else if file_type.is_file() {
                 // remove symlinks
                 if target_path.is_symlink() {
-                    if self.config.simulate {
-                        println!("would remove symlink: {:?}", target_path);
-                    } else {
-                        fs::remove_file(&target_path)?;
-                        if self.config.verbose {
-                            info!("Removed symlink: {:?}", target_path);
-                        }
-                    }
+                    self.remove_path(&target_path, "symlink")?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Remove a path, or report that it would be removed in simulate mode
+    fn remove_path(&self, path: &Path, kind: &str) -> Result<()> {
+        if self.config.simulate {
+            println!("Would remove {kind}: {:?}", path);
+            return Ok(());
+        }
+
+        if path.is_dir() {
+            fs::remove_dir(path)?;
+        } else {
+            fs::remove_file(path)?;
+        }
+        if self.config.verbose > 0 {
+            info!("Removed {kind}: {:?}", path);
         }
         Ok(())
     }
@@ -168,6 +188,41 @@ impl CrabStow {
     /// check if a directory is empty
     fn is_dir_empty(&self, path: &Path) -> bool {
         path.read_dir()
-            .map_or(false, |mut entries| entries.next().is_none())
+            .is_ok_and(|mut entries| entries.next().is_none())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::StowConfig;
+    use std::path::PathBuf;
+
+    fn minimal_config(target_dir: &Path, stow_dir: &Path) -> StowConfig {
+        StowConfig {
+            target_dir: PathBuf::from(target_dir),
+            stow_dir: PathBuf::from(stow_dir),
+            package_name: "dotfiles".to_string(),
+            simulate: false,
+            verbose: 0,
+            no_folding: false,
+            adopt: false,
+            restow: false,
+            unstow: false,
+        }
+    }
+
+    #[test]
+    fn is_dir_empty_detects_empty_and_nonempty_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let crab = CrabStow::new(minimal_config(tmp.path(), tmp.path()));
+
+        assert!(crab.is_dir_empty(tmp.path()));
+
+        fs::write(tmp.path().join("file"), "x").unwrap();
+        assert!(!crab.is_dir_empty(tmp.path()));
+
+        // a non-existent directory is not "empty" (it cannot be removed as a dir)
+        assert!(!crab.is_dir_empty(&tmp.path().join("does-not-exist")));
     }
 }
