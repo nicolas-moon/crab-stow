@@ -1,3 +1,19 @@
+# Tag-triggered release: builds crab-stow on linux/macos/windows and
+# publishes the binaries as GitHub release assets.
+#
+# The macOS lane is signed with a Developer ID certificate and notarized
+# so the binary opens cleanly on macOS (no Gatekeeper block). It needs
+# these repository secrets (Settings -> Secrets and variables -> Actions):
+#
+#   MACOS_CERT_P12            base64 of your Developer ID Application .p12
+#   MACOS_CERT_PASSWORD       the password you set when exporting the .p12
+#   MACOS_SIGN_IDENTITY       e.g. "Developer ID Application: Nicolas Moon (TEAMID)"
+#   APPSTORECONNECT_API_KEY_ID      ASC key ID (10 chars)
+#   APPSTORECONNECT_ISSUER_ID       ASC issuer ID (UUID)
+#   APPSTORECONNECT_API_KEY         base64 of the .p8 key (App Services, App Manager role)
+#
+# Linux and Windows lanes need no secrets.
+
 name: Release
 
 on:
@@ -10,20 +26,17 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build & publish (${{ matrix.target }})
+    name: Build & publish (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,8 +48,9 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (unix)
-        if: matrix.archive == 'tar.gz'
+      # ---- Linux: plain tarball ----
+      - name: Package (linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -44,14 +58,85 @@ jobs:
           mv "target/${{ matrix.target }}/release/crab-stow" "dist/crab-stow"
           tar -czf "dist/crab-stow-v${VERSION}-${{ matrix.target }}.tar.gz" -C dist crab-stow
 
+      # ---- Windows: plain zip ----
       - name: Package (windows)
-        if: matrix.archive == 'zip'
+        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
           Move-Item "target/${{ matrix.target }}/release/crab-stow.exe" "dist/crab-stow.exe"
           Compress-Archive -Path "dist/crab-stow.exe" -DestinationPath "dist/crab-stow-v${version}-${{ matrix.target }}.zip"
+
+      # ---- macOS: Developer ID sign + notarize ----
+      - name: Import Developer ID certificate
+        if: matrix.os == 'macos-latest'
+        env:
+          CERT_P12_B64: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$CERT_P12_B64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          KEYCHAIN_PASSWORD="build-keychain"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import "$RUNNER_TEMP/cert.p12" \
+            -P "$CERT_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" build.keychain
+          security find-identity -v -p codesigning
+
+      - name: Sign binary (Developer ID, hardened runtime)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          codesign --force \
+            --sign "${{ secrets.MACOS_SIGN_IDENTITY }}" \
+            --options runtime \
+            "target/${{ matrix.target }}/release/crab-stow"
+          codesign --display --verbose=4 "target/${{ matrix.target }}/release/crab-stow"
+
+      # Notarization validates the exact shipped artifact, so the macOS
+      # asset is a zip (not a tarball).
+      - name: Package (macos, zip)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp "target/${{ matrix.target }}/release/crab-stow" "dist/crab-stow"
+          zip -jq "dist/crab-stow-v${VERSION}-${{ matrix.target }}.zip" "dist/crab-stow"
+          rm "dist/crab-stow"
+
+      - name: Notarize
+        if: matrix.os == 'macos-latest'
+        env:
+          ASC_KEY_ID: ${{ secrets.APPSTORECONNECT_API_KEY_ID }}
+          ASC_ISSUER: ${{ secrets.APPSTORECONNECT_ISSUER_ID }}
+          ASC_KEY_B64: ${{ secrets.APPSTORECONNECT_API_KEY }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ASSET="dist/crab-stow-v${VERSION}-${{ matrix.target }}.zip"
+          printf '%s' "$ASC_KEY_B64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool submit "$ASSET" \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer "$ASC_ISSUER" \
+            --timeout 900 --wait
+
+      - name: Staple notarization ticket
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          xcrun stapler staple "dist/crab-stow-v${VERSION}-${{ matrix.target }}.zip"
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
